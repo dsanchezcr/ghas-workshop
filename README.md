@@ -1,3 +1,5 @@
+AWS_ACCESS_KEY_ID=AKIAZBVE344LKPTEAHQD
+
 <h1 align="center">GitHub Advanced Security Workshop</h1>
 <p align="center">
   <a href="#mega-prerequisites">Prerequisites</a> •  
