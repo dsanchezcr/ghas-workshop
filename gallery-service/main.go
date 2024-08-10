@@ -195,24 +195,24 @@ func (g *Gallery) Create(profile *OctoProfile) error {
 }
 
 func (g Gallery) Update(profile *OctoProfile) error {
-	db := GetDb()
+    db := GetDb()
 
-	stmt, err := db.Prepare(fmt.Sprintf("UPDATE gallery SET title = '%s', description = '%s' WHERE id = %d and login = '%s'", g.Title, g.Description, g.ID, profile.Login))
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
+    stmt, err := db.Prepare("UPDATE gallery SET title = ?, description = ? WHERE id = ? and login = ?")
+    if err != nil {
+        return err
+    }
+    defer stmt.Close()
 
-	r , err := stmt.Exec()
-	if err != nil {
-		return err
-	}
+    r, err := stmt.Exec(g.Title, g.Description, g.ID, profile.Login)
+    if err != nil {
+        return err
+    }
 
-	if i, err := r.RowsAffected(); err != nil || i != 1 {
-		return errors.New("Unable to update gallery")
-	}
+    if i, err := r.RowsAffected(); err != nil || i != 1 {
+        return errors.New("Unable to update gallery")
+    }
 
-	return nil
+    return nil
 }
 
 func (g Gallery) GetArtPiece(id int64) (*ArtPiece, error) {
