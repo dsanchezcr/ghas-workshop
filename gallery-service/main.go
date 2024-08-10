@@ -377,7 +377,14 @@ func UpdateGalleryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = gallery.Update(profile)
+	stmt, err := db.Prepare("UPDATE gallery SET title = ?, description = ? WHERE id = ? and login = ?")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(gallery.Title, gallery.Description, gallery.ID, profile.Login)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -390,12 +397,54 @@ func GetGalleryHandler(w http.ResponseWriter, r *http.Request) {
 	profile := GetProfile(r)
 	var gallery Gallery
 
-	err := gallery.Get(profile)
+	stmt, err := db.Prepare(`SELECT id, title, description FROM gallery WHERE login = ?`)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer stmt.Close()
 
-	if err == nil {
+	rs, err := stmt.Query(profile.Login)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rs.Close()
+	
+	if rs.Next() {
+		rs.Scan(&gallery.ID, &gallery.Title, &gallery.Description)
 		json.NewEncoder(w).Encode(gallery)
 	} else {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		gallery.ID = -1
+		gallery.Title = "The Empty gallery"
+		gallery.Description = "This gallery is in desparate need of some art!" 
+		
+		stmt, err := db.Prepare("INSERT INTO gallery (login, title, description) VALUES(?,?,?)")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer stmt.Close()
+
+		r , err := stmt.Exec(profile.Login, gallery.Title, gallery.Description)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if i, err := r.RowsAffected(); err != nil || i != 1 {
+			http.Error(w, "Unable to create gallery", http.StatusInternalServerError)
+			return
+		}
+
+		newId, err := r.LastInsertId()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		gallery.ID = newId
+
+		json.NewEncoder(w).Encode(gallery)
 	}
 }
 
@@ -489,13 +538,27 @@ func GetGalleryArtHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	art_pieces, err := gallery.GetArtPiece(art_piece_id)
+	stmt, err := db.Prepare(`SELECT id, title, description, stars, uri FROM art_piece WHERE gallery_id = ? AND id = ?`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer stmt.Close()
 
-	json.NewEncoder(w).Encode(art_pieces)
+	rs, err := stmt.Query(gallery.ID, art_piece_id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rs.Close()
+	
+	if rs.Next() {
+		art_piece := &ArtPiece{}
+		rs.Scan(&art_piece.ID, &art_piece.Title, &art_piece.Description, &art_piece.Stars, &art_piece.Uri)
+		json.NewEncoder(w).Encode(art_piece)
+	} else {
+		http.Error(w, "Art piece seems to be missing!", http.StatusInternalServerError)
+	}
 }
 
 func UpdateGalleryArtHandler(w http.ResponseWriter, r *http.Request) {
@@ -515,28 +578,50 @@ func UpdateGalleryArtHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	old_art_piece, err := gallery.GetArtPiece(art_piece_id)
+	stmt, err := db.Prepare(`SELECT id, title, description, stars, uri FROM art_piece WHERE gallery_id = ? AND id = ?`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer stmt.Close()
 
-	var art_piece ArtPiece
-	err = json.NewDecoder(r.Body).Decode(&art_piece)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	art_piece.ID = old_art_piece.ID
-
-	err = art_piece.Update(gallery)
+	rs, err := stmt.Query(gallery.ID, art_piece_id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer rs.Close()
+	
+	if rs.Next() {
+		old_art_piece := &ArtPiece{}
+		rs.Scan(&old_art_piece.ID, &old_art_piece.Title, &old_art_piece.Description, &old_art_piece.Stars, &old_art_piece.Uri)
 
-	w.WriteHeader(http.StatusOK)
+		var art_piece ArtPiece
+		err = json.NewDecoder(r.Body).Decode(&art_piece)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		art_piece.ID = old_art_piece.ID
+
+		stmt, err := db.Prepare("UPDATE art_piece SET title = ?, description = ?, stars = ?, uri = ? WHERE id = ? and gallery_id = ?")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer stmt.Close()
+
+		_, err = stmt.Exec(art_piece.Title, art_piece.Description, art_piece.Stars, art_piece.Uri, art_piece.ID, gallery.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	} else {
+		http.Error(w, "Art piece seems to be missing!", http.StatusInternalServerError)
+	}
 }
 
 func DeleteGalleryArtHandler(w http.ResponseWriter, r *http.Request) {
@@ -556,19 +641,41 @@ func DeleteGalleryArtHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	art_piece, err := gallery.GetArtPiece(art_piece_id)
+	stmt, err := db.Prepare(`SELECT id, title, description, stars, uri FROM art_piece WHERE gallery_id = ? AND id = ?`)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer stmt.Close()
 
-	err = art_piece.Delete(gallery)
+	rs, err := stmt.Query(gallery.ID, art_piece_id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	defer rs.Close()
+	
+	if rs.Next() {
+		art_piece := &ArtPiece{}
+		rs.Scan(&art_piece.ID, &art_piece.Title, &art_piece.Description, &art_piece.Stars, &art_piece.Uri)
 
-	w.WriteHeader(http.StatusOK)
+		stmt, err := db.Prepare("DELETE FROM art_piece WHERE id = ? and gallery_id = ?")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer stmt.Close()
+
+		_, err = stmt.Exec(art_piece.ID, gallery.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	} else {
+		http.Error(w, "Art piece seems to be missing!", http.StatusInternalServerError)
+	}
 }
 
 func HomeLinkHandler(w http.ResponseWriter, r *http.Request) {
